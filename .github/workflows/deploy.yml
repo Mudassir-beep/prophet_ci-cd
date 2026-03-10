@@ -1,3 +1,4 @@
+```yaml
 name: CICD Prophet
 
 on:
@@ -10,14 +11,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-
       - uses: actions/setup-python@v4
         with:
           python-version: "3.10"
-
       - name: Install
         run: pip install -r requirements.txt && pip install pytest
-
       - name: Test
         run: pytest tests/ -v
 
@@ -27,12 +25,10 @@ jobs:
     if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v3
-
       - name: Git Config
         run: |
           git config --global user.email "ci@github.com"
           git config --global user.name "GitHub CI"
-
       - name: Push to HF
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -40,11 +36,3 @@ jobs:
           git remote add hf https://muddasser:${HF_TOKEN}@huggingface.co/spaces/muddasser/ci_cd_prophet
           git push hf main --force
 ```
-
----
-
-### Key Fix
-```
-Split the long command into
-two separate lines under run: |
-instead of one long line
