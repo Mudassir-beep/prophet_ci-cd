@@ -1,17 +1,13 @@
-name: CICD Travel Prophet
+name: CICD Prophet
 
 on:
   push:
-    branches:
-      - main
-  pull_request:
     branches:
       - main
 
 jobs:
   test:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v3
 
@@ -19,36 +15,36 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Install Dependencies
+      - name: Install
         run: pip install -r requirements.txt && pip install pytest
 
-      - name: Run Tests
+      - name: Test
         run: pytest tests/ -v
 
   deploy:
     runs-on: ubuntu-latest
     needs: test
     if: github.ref == 'refs/heads/main'
-
     steps:
       - uses: actions/checkout@v3
 
-      - name: Configure Git
+      - name: Git Config
         run: |
           git config --global user.email "ci@github.com"
           git config --global user.name "GitHub CI"
 
-      - name: Push to Hugging Face
-        run: git remote add huggingface https://muddasser:${{ secrets.HF_TOKEN }}@huggingface.co/spaces/muddasser/ci_cd_prophet && git push huggingface main --force
+      - name: Push to HF
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          git remote add hf https://muddasser:${HF_TOKEN}@huggingface.co/spaces/muddasser/ci_cd_prophet
+          git push hf main --force
 ```
 
 ---
 
-### Key Changes Made
+### Key Fix
 ```
-✅ Removed special characters from name
-✅ Simplified branch syntax
-✅ Merged run commands to avoid line issues
-✅ Fixed HF_TOKEN syntax
-✅ Removed emoji from step names
-✅ Shorter cleaner file
+Split the long command into
+two separate lines under run: |
+instead of one long line
