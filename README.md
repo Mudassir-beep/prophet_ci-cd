@@ -101,6 +101,7 @@ pytest tests/ -v
 ---
 
 ## 🔄 How CI/CD Works
+ # Travel Prophet Forecaster
 
 | Event | What Happens |
 |-------|-------------|
