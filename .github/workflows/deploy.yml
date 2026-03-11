@@ -29,7 +29,7 @@ jobs:
         run: pip install huggingface_hub
       - name: Deploy to HuggingFace
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_TOKEN: ${{ secrets.HF_API_KEY }}
         run: |
           python - <<'PYEOF'
           import os
