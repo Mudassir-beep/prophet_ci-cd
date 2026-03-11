@@ -2,26 +2,19 @@ import pandas as pd
 import numpy as np
 import json
 import os
-from datetime import datetime, timedelta
-from prophet import Prophet
-from evidently.report import Report
-from evidently.metric_preset import DataDriftPreset
-from evidently.metrics import DatasetDriftMetric
+from datetime import datetime
 
 # ================================================
 # CONFIGURATION
 # ================================================
-REFERENCE_DATA_PATH = "data/train_data.csv"   # original training data
-LIVE_DATA_PATH      = "data/live_data.csv"    # recent production data
+REFERENCE_DATA_PATH = "data/train_data.csv"
+LIVE_DATA_PATH      = "data/live_data.csv"
 REPORT_PATH         = "reports/drift_report.html"
-DRIFT_THRESHOLD     = 0.5                     # 50% features drifted = alert
 
 # ================================================
-# STEP 1 - Generate or Load Reference Data
-# (In production this comes from S3)
+# STEP 1 - Load Reference Data
 # ================================================
 def load_reference_data():
-    """Load original training data used to train Prophet"""
     if os.path.exists(REFERENCE_DATA_PATH):
         print("Loading reference data from file...")
         df = pd.read_csv(REFERENCE_DATA_PATH)
@@ -34,20 +27,18 @@ def load_reference_data():
         yearly = 30 * np.sin(2 * np.pi * np.arange(len(dates)) / 365)
         noise = np.random.normal(0, 8, len(dates))
         df = pd.DataFrame({
-            "ds":     dates,
-            "y":      (trend + yearly + noise).clip(min=10),
-            "month":  dates.month,
+            "ds":        dates,
+            "y":         (trend + yearly + noise).clip(min=10),
+            "month":     dates.month,
             "dayofweek": dates.dayofweek,
-            "quarter": dates.quarter
+            "quarter":   dates.quarter
         })
     return df
 
 # ================================================
-# STEP 2 - Generate or Load Live Production Data
-# (In production this comes from S3 daily logs)
+# STEP 2 - Load Live Data
 # ================================================
 def load_live_data():
-    """Load recent production data — last 30 days"""
     if os.path.exists(LIVE_DATA_PATH):
         print("Loading live data from file...")
         df = pd.read_csv(LIVE_DATA_PATH)
@@ -56,10 +47,8 @@ def load_live_data():
         print("Generating sample live data (simulating drift)...")
         np.random.seed(99)
         dates = pd.date_range(start="2024-01-01", end="2024-01-31", freq="D")
-
-        # Simulating drift — different distribution than training
-        trend = np.linspace(200, 250, len(dates))   # higher demand (drift!)
-        noise = np.random.normal(0, 20, len(dates))  # more noise (drift!)
+        trend = np.linspace(200, 250, len(dates))
+        noise = np.random.normal(0, 20, len(dates))
         df = pd.DataFrame({
             "ds":        dates,
             "y":         (trend + noise).clip(min=10),
@@ -70,185 +59,203 @@ def load_live_data():
     return df
 
 # ================================================
-# STEP 3 - Run Prophet Forecast on Live Data
+# STEP 3 - Run Drift Detection
 # ================================================
-def get_forecast_metrics(reference_df, live_df):
-    """Train Prophet on reference data and evaluate on live data"""
-    print("Training Prophet model on reference data...")
+def run_drift_detection(reference_df, live_df):
+    print("Running drift detection...")
 
-    model = Prophet(
-        seasonality_mode="multiplicative",
-        yearly_seasonality=True,
-        weekly_seasonality=True
-    )
-    model.fit(reference_df[['ds', 'y']])
-
-    # Forecast for live period
-    future = model.make_future_dataframe(
-        periods=len(live_df),
-        freq='D'
-    )
-    forecast = model.predict(future)
-    forecast_live = forecast.tail(len(live_df))
-
-    # Calculate metrics
-    actual    = live_df['y'].values
-    predicted = forecast_live['yhat'].values
-
-    rmse = np.sqrt(np.mean((actual - predicted) ** 2))
-    mae  = np.mean(np.abs(actual - predicted))
-    mape = np.mean(np.abs((actual - predicted) / actual)) * 100
-
-    print(f"RMSE: {rmse:.4f}")
-    print(f"MAE:  {mae:.4f}")
-    print(f"MAPE: {mape:.4f}%")
-
-    return {
-        "rmse": round(rmse, 4),
-        "mae":  round(mae, 4),
-        "mape": round(mape, 4)
-    }
-
-# ================================================
-# STEP 4 - Run Evidently Drift Report
-# ================================================
-def run_drift_report(reference_df, live_df):
-    """Run Evidently AI drift detection"""
-    print("Running Evidently AI drift detection...")
-
-    # Use only numeric feature columns
     feature_cols = ['y', 'month', 'dayofweek', 'quarter']
+    ref  = reference_df[feature_cols].copy()
+    curr = live_df[feature_cols].copy()
 
-    reference_features = reference_df[feature_cols].copy()
-    live_features      = live_df[feature_cols].copy()
+    drift_results = {}
+    drifted_count = 0
 
-    # Run Evidently report
-    report = Report(metrics=[
-        DataDriftPreset(),
-        DatasetDriftMetric()
-    ])
+    for col in feature_cols:
+        ref_mean  = ref[col].mean()
+        curr_mean = curr[col].mean()
+        ref_std   = ref[col].std()
 
-    report.run(
-        reference_data=reference_features,
-        current_data=live_features
-    )
+        # Simple z-score drift detection
+        if ref_std > 0:
+            z_score = abs(curr_mean - ref_mean) / ref_std
+            drifted = z_score > 2.0
+        else:
+            drifted = False
 
-    # Extract drift results
-    report_dict   = report.as_dict()
-    drift_detected = report_dict['metrics'][1]['result']['dataset_drift']
-    drift_share    = report_dict['metrics'][1]['result']['share_of_drifted_columns']
+        drift_results[col] = {
+            "ref_mean":  round(ref_mean, 4),
+            "curr_mean": round(curr_mean, 4),
+            "drifted":   drifted
+        }
 
-    # Save HTML report
-    os.makedirs("reports", exist_ok=True)
-    report.save_html(REPORT_PATH)
-    print(f"Drift report saved to: {REPORT_PATH}")
+        if drifted:
+            drifted_count += 1
+            print(f"  DRIFT in {col}: ref={ref_mean:.2f} curr={curr_mean:.2f}")
+        else:
+            print(f"  OK    {col}: ref={ref_mean:.2f} curr={curr_mean:.2f}")
+
+    drift_share    = drifted_count / len(feature_cols)
+    drift_detected = drift_share > 0.5
 
     return {
         "drift_detected": drift_detected,
         "drift_share":    round(drift_share, 4),
-        "report_path":    REPORT_PATH
+        "feature_drift":  drift_results
     }
 
 # ================================================
-# STEP 5 - Send Alert (Email/Slack/SNS)
+# STEP 4 - Get Forecast Metrics
 # ================================================
-def send_alert(drift_results, forecast_metrics):
-    """Send alert when drift is detected"""
+def get_forecast_metrics(reference_df, live_df):
+    print("Calculating forecast metrics...")
+    try:
+        from prophet import Prophet
+        model = Prophet(
+            seasonality_mode="multiplicative",
+            yearly_seasonality=True
+        )
+        model.fit(reference_df[['ds', 'y']])
+        future   = model.make_future_dataframe(periods=len(live_df), freq='D')
+        forecast = model.predict(future)
+        forecast_live = forecast.tail(len(live_df))
 
-    message = f"""
-    ╔══════════════════════════════════════╗
-    ║   🚨 DATA DRIFT ALERT DETECTED!     ║
-    ╚══════════════════════════════════════╝
+        actual    = live_df['y'].values
+        predicted = forecast_live['yhat'].values
+        rmse = np.sqrt(np.mean((actual - predicted) ** 2))
+        mae  = np.mean(np.abs(actual - predicted))
+        mape = np.mean(np.abs((actual - predicted) / actual)) * 100
 
-    Detected at: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+        print(f"  RMSE: {rmse:.4f}")
+        print(f"  MAE:  {mae:.4f}")
+        print(f"  MAPE: {mape:.4f}%")
 
-    📊 Drift Results:
-    ├── Drift Detected: {drift_results['drift_detected']}
-    └── Drifted Features: {drift_results['drift_share']*100:.1f}%
+        return {"rmse": round(rmse, 4), "mae": round(mae, 4), "mape": round(mape, 4)}
 
-    📈 Prophet Forecast Metrics on Live Data:
-    ├── RMSE: {forecast_metrics['rmse']}
-    ├── MAE:  {forecast_metrics['mae']}
-    └── MAPE: {forecast_metrics['mape']}%
+    except Exception as e:
+        print(f"  Prophet metrics skipped: {e}")
+        return {"rmse": None, "mae": None, "mape": None}
 
-    📋 Full Report: {drift_results['report_path']}
+# ================================================
+# STEP 5 - Save HTML Report
+# ================================================
+def save_report(drift_results, forecast_metrics):
+    os.makedirs("reports", exist_ok=True)
 
-    ⚡ Action Required:
-    1. Review drift report
-    2. Check if retraining is needed
-    3. Push updated code to GitHub
-       to trigger CI/CD retraining
+    drift_color = "red" if drift_results['drift_detected'] else "green"
+    drift_text  = "DRIFT DETECTED" if drift_results['drift_detected'] else "NO DRIFT"
+
+    rows = ""
+    for col, result in drift_results['feature_drift'].items():
+        color = "red" if result['drifted'] else "green"
+        rows += f"""
+        <tr>
+            <td>{col}</td>
+            <td>{result['ref_mean']}</td>
+            <td>{result['curr_mean']}</td>
+            <td style='color:{color}'>{result['drifted']}</td>
+        </tr>"""
+
+    html = f"""
+    <html>
+    <head>
+        <title>Drift Report</title>
+        <style>
+            body {{ font-family: Arial; padding: 20px; }}
+            table {{ border-collapse: collapse; width: 100%; }}
+            th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+            th {{ background-color: #4CAF50; color: white; }}
+            .status {{ font-size: 24px; font-weight: bold; color: {drift_color}; }}
+        </style>
+    </head>
+    <body>
+        <h1>Travel Prophet — Drift Report</h1>
+        <p>Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
+
+        <h2>Overall Status</h2>
+        <p class='status'>{drift_text}</p>
+        <p>Drifted Features: {drift_results['drift_share']*100:.1f}%</p>
+
+        <h2>Forecast Metrics on Live Data</h2>
+        <p>RMSE: {forecast_metrics['rmse']}</p>
+        <p>MAE:  {forecast_metrics['mae']}</p>
+        <p>MAPE: {forecast_metrics['mape']}%</p>
+
+        <h2>Feature Drift Details</h2>
+        <table>
+            <tr>
+                <th>Feature</th>
+                <th>Reference Mean</th>
+                <th>Current Mean</th>
+                <th>Drifted</th>
+            </tr>
+            {rows}
+        </table>
+    </body>
+    </html>
     """
 
-    print(message)
-
-    # ── In production on AWS uncomment this: ──
-    # import boto3
-    # sns = boto3.client('sns', region_name='us-east-1')
-    # sns.publish(
-    #     TopicArn='arn:aws:sns:us-east-1:YOUR_ID:drift-alerts',
-    #     Subject='Data Drift Detected in Travel Prophet!',
-    #     Message=message
-    # )
-
-    # ── For Slack notifications uncomment this: ──
-    # import requests
-    # requests.post(
-    #     os.environ['SLACK_WEBHOOK_URL'],
-    #     json={"text": message}
-    # )
+    with open(REPORT_PATH, "w") as f:
+        f.write(html)
+    print(f"Report saved to {REPORT_PATH}")
 
 # ================================================
-# MAIN — Run Full Monitoring Pipeline
+# STEP 6 - Send Alert
+# ================================================
+def send_alert(drift_results, forecast_metrics):
+    message = f"""
+    DRIFT ALERT!
+    Time:     {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+    Drift:    {drift_results['drift_share']*100:.1f}% features drifted
+    RMSE:     {forecast_metrics['rmse']}
+    Action:   Retrain model and redeploy!
+    """
+    print(message)
+
+# ================================================
+# MAIN
 # ================================================
 def main():
     print("=" * 50)
-    print("  Travel Prophet — Drift Monitor")
-    print(f"  Running at: {datetime.now()}")
+    print("  Travel Prophet Drift Monitor")
+    print(f"  {datetime.now()}")
     print("=" * 50)
 
-    # Load data
-    reference_df = load_reference_data()
-    live_df      = load_live_data()
+    reference_df     = load_reference_data()
+    live_df          = load_live_data()
 
-    print(f"\nReference data: {len(reference_df)} rows")
-    print(f"Live data:      {len(live_df)} rows")
+    print(f"\nReference: {len(reference_df)} rows")
+    print(f"Live:      {len(live_df)} rows")
 
-    # Get forecast metrics
     print("\n--- Forecast Metrics ---")
     forecast_metrics = get_forecast_metrics(reference_df, live_df)
 
-    # Run drift detection
     print("\n--- Drift Detection ---")
-    drift_results = run_drift_report(reference_df, live_df)
+    drift_results    = run_drift_detection(reference_df, live_df)
 
-    # Check results and alert
     print("\n--- Results ---")
     if drift_results['drift_detected']:
-        print("🚨 DRIFT DETECTED — Sending alert!")
+        print("DRIFT DETECTED!")
         send_alert(drift_results, forecast_metrics)
     else:
-        print("✅ No drift detected — model is healthy!")
-        print(f"   Drifted features: {drift_results['drift_share']*100:.1f}%")
-        print(f"   RMSE: {forecast_metrics['rmse']}")
+        print("No drift detected - model healthy!")
 
-    # Save results summary
+    save_report(drift_results, forecast_metrics)
+
     summary = {
-        "timestamp":        datetime.now().isoformat(),
-        "drift_detected":   drift_results['drift_detected'],
-        "drift_share":      drift_results['drift_share'],
-        "rmse":             forecast_metrics['rmse'],
-        "mae":              forecast_metrics['mae'],
-        "mape":             forecast_metrics['mape']
+        "timestamp":      datetime.now().isoformat(),
+        "drift_detected": drift_results['drift_detected'],
+        "drift_share":    drift_results['drift_share'],
+        "rmse":           forecast_metrics['rmse'],
+        "mae":            forecast_metrics['mae'],
+        "mape":           forecast_metrics['mape']
     }
 
-    os.makedirs("reports", exist_ok=True)
     with open("reports/monitoring_summary.json", "w") as f:
         json.dump(summary, f, indent=2)
 
-    print("\nMonitoring summary saved to reports/monitoring_summary.json")
+    print("\nMonitoring complete!")
     print("=" * 50)
-    print("Monitoring complete!")
 
 if __name__ == "__main__":
     main()
