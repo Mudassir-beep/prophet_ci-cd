@@ -1,3 +1,15 @@
+---
+title: Travel Prophet Forecaster
+emoji: ✈️
+colorFrom: blue
+colorTo: green
+sdk: streamlit
+sdk_version: "1.32.0"
+python_version: "3.10"
+app_file: app.py
+pinned: false
+---
+
 # ✈️ Travel Demand Forecaster — Prophet + Streamlit
 
 A time series forecasting app for travel demand using Facebook Prophet, deployed via CI/CD to Hugging Face Spaces.
