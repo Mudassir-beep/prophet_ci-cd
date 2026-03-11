@@ -15,19 +15,58 @@ jobs:
         run: pip install -r requirements.txt && pip install pytest
       - name: Test
         run: pytest tests/test_app.py -v
+
   deploy:
     runs-on: ubuntu-latest
     needs: test
     if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          fetch-depth: 0
-      - name: Push to HF
+          python-version: "3.10"
+      - name: Install huggingface_hub
+        run: pip install huggingface_hub
+      - name: Deploy to HuggingFace
         env:
-          HF_TOKEN: ${{ secrets.HF_API_KEY }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          git config --global user.email "ci@github.com"
-          git config --global user.name "GitHub CI"
-          git remote add hf https://user:${HF_TOKEN}@huggingface.co/spaces/muddasser/ci_cd_prophet
-          git push hf main --force
+          python - <<'PYEOF'
+          import os
+          from huggingface_hub import HfApi
+
+          token = os.environ["HF_TOKEN"]
+          api = HfApi(token=token)
+
+          files = ["app.py", "requirements.txt", "README.md", "monitor.py"]
+          for file in files:
+              if os.path.exists(file):
+                  api.upload_file(
+                      path_or_fileobj=file,
+                      path_in_repo=file,
+                      repo_id="muddasser/ci_cd_prophet",
+                      repo_type="space",
+                      token=token
+                  )
+                  print(f"Uploaded {file}")
+          print("Deployment complete!")
+          PYEOF
+
+  monitor:
+    runs-on: ubuntu-latest
+    needs: deploy
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install monitoring dependencies
+        run: pip install evidently prophet pandas numpy
+      - name: Run Drift Monitor
+        run: python monitor.py
+      - name: Upload Drift Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: drift-report
+          path: reports/
